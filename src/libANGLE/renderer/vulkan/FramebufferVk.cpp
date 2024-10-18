@@ -2674,9 +2674,10 @@ void FramebufferVk::updateRenderPassDesc(ContextVk *contextVk)
         }
     }
 
-    if (contextVk->isInFramebufferFetchMode())
+    if (!contextVk->getFeatures().preferDynamicRendering.enabled &&
+        contextVk->isInColorFramebufferFetchMode())
     {
-        mRenderPassDesc.setFramebufferFetchMode(true);
+        mRenderPassDesc.setFramebufferFetchMode(vk::FramebufferFetchMode::Color);
     }
 
     if (contextVk->getFeatures().enableMultisampledRenderToTexture.enabled)
@@ -2961,7 +2962,8 @@ angle::Result FramebufferVk::createNewFramebuffer(
 angle::Result FramebufferVk::getFramebuffer(ContextVk *contextVk,
                                             vk::RenderPassFramebuffer *framebufferOut)
 {
-    ASSERT(mCurrentFramebufferDesc.hasFramebufferFetch() == mRenderPassDesc.hasFramebufferFetch());
+    ASSERT(mCurrentFramebufferDesc.hasColorFramebufferFetch() ==
+           mRenderPassDesc.hasColorFramebufferFetch());
 
     const gl::Extents attachmentsSize = mState.getExtents();
     ASSERT(attachmentsSize.width != 0 && attachmentsSize.height != 0);
@@ -3012,8 +3014,8 @@ angle::Result FramebufferVk::getFramebuffer(ContextVk *contextVk,
             // If there is a backbuffer, query the framebuffer from WindowSurfaceVk instead.
             ANGLE_TRY(mBackbuffer->getCurrentFramebuffer(
                 contextVk,
-                mRenderPassDesc.hasFramebufferFetch() ? FramebufferFetchMode::Enabled
-                                                      : FramebufferFetchMode::Disabled,
+                mRenderPassDesc.hasColorFramebufferFetch() ? vk::FramebufferFetchMode::Color
+                                                           : vk::FramebufferFetchMode::None,
                 *compatibleRenderPass, &framebufferHandle));
         }
     }
@@ -3830,32 +3832,25 @@ angle::Result FramebufferVk::flushDeferredClears(ContextVk *contextVk)
     return contextVk->startRenderPass(getRotatedCompleteRenderArea(contextVk), nullptr, nullptr);
 }
 
-void FramebufferVk::switchToFramebufferFetchMode(ContextVk *contextVk, bool hasFramebufferFetch)
+void FramebufferVk::switchToColorFramebufferFetchMode(ContextVk *contextVk,
+                                                      bool hasColorFramebufferFetch)
 {
+    // Framebuffer fetch use by the shader does not affect the framebuffer object in any way with
+    // dynamic rendering.
+    ASSERT(!contextVk->getFeatures().preferDynamicRendering.enabled);
+
     // The switch happens once, and is permanent.
-    if (mCurrentFramebufferDesc.hasFramebufferFetch() == hasFramebufferFetch)
+    if (mCurrentFramebufferDesc.hasColorFramebufferFetch() == hasColorFramebufferFetch)
     {
         return;
     }
 
-    mCurrentFramebufferDesc.setFramebufferFetchMode(hasFramebufferFetch);
+    mCurrentFramebufferDesc.setColorFramebufferFetchMode(hasColorFramebufferFetch);
 
-    mRenderPassDesc.setFramebufferFetchMode(hasFramebufferFetch);
+    mRenderPassDesc.setFramebufferFetchMode(hasColorFramebufferFetch
+                                                ? vk::FramebufferFetchMode::Color
+                                                : vk::FramebufferFetchMode::None);
     contextVk->onDrawFramebufferRenderPassDescChange(this, nullptr);
-
-    if (contextVk->getFeatures().preferDynamicRendering.enabled)
-    {
-        // Note: with dynamic rendering, |onDrawFramebufferRenderPassDescChange| is really
-        // unnecessary, but is called for simplicity.  The downside is unnecessary recreation of
-        // pipelines, which is mitigated by |permanentlySwitchToFramebufferFetchMode| which is
-        // automatically enabled with |preferDynamicRendering|.
-        //
-        // If |onDrawFramebufferRenderPassDescChange| is to be optimized away, care must be taken
-        // as GraphicsPipelineDesc::mRenderPassDesc::mHasFramebufferFetch can get out of sync with
-        // FramebufferDesc::mHasFramebufferFetch, and
-        // RenderPassCommandBufferHelper::mRenderPassDesc::mHasFramebufferFetch.
-        return;
-    }
 
     // Make sure framebuffer is recreated.
     releaseCurrentFramebuffer(contextVk);
@@ -3863,7 +3858,7 @@ void FramebufferVk::switchToFramebufferFetchMode(ContextVk *contextVk, bool hasF
     // Clear the framebuffer cache, as none of the old framebuffers are usable.
     if (contextVk->getFeatures().permanentlySwitchToFramebufferFetchMode.enabled)
     {
-        ASSERT(hasFramebufferFetch);
+        ASSERT(hasColorFramebufferFetch);
         releaseCurrentFramebuffer(contextVk);
     }
 }

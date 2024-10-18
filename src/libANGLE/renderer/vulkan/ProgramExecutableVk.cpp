@@ -100,7 +100,8 @@ void SetupDefaultPipelineState(const vk::Context *context,
     // Set render pass state, affecting both complete and shaders-only pipelines.
     graphicsPipelineDescOut->setTopology(mode);
     graphicsPipelineDescOut->setRenderPassSampleCount(1);
-    graphicsPipelineDescOut->setRenderPassFramebufferFetchMode(glExecutable.usesFramebufferFetch());
+    graphicsPipelineDescOut->setRenderPassFramebufferFetchMode(
+        vk::GetProgramFramebufferFetchMode(&glExecutable));
 
     const std::vector<gl::ProgramOutput> &outputVariables    = glExecutable.getOutputVariables();
     const std::vector<gl::VariableLocation> &outputLocations = glExecutable.getOutputLocations();
@@ -1152,14 +1153,15 @@ void ProgramExecutableVk::addImageDescriptorSetDesc(vk::DescriptorSetLayoutDesc 
     }
 }
 
-void ProgramExecutableVk::addInputAttachmentDescriptorSetDesc(vk::DescriptorSetLayoutDesc *descOut)
+void ProgramExecutableVk::addInputAttachmentDescriptorSetDesc(vk::Context *context,
+                                                              vk::DescriptorSetLayoutDesc *descOut)
 {
     if (!mExecutable->getLinkedShaderStages()[gl::ShaderType::Fragment])
     {
         return;
     }
 
-    if (!mExecutable->usesFramebufferFetch())
+    if (!mExecutable->usesColorFramebufferFetch())
     {
         return;
     }
@@ -1172,7 +1174,8 @@ void ProgramExecutableVk::addInputAttachmentDescriptorSetDesc(vk::DescriptorSetL
 
     uint32_t baseBinding = baseInfo.binding - firstInputAttachment;
 
-    for (uint32_t colorIndex = 0; colorIndex < gl::IMPLEMENTATION_MAX_DRAW_BUFFERS; ++colorIndex)
+    const uint32_t maxInputAttachmentCount = context->getRenderer()->getMaxInputAttachmentCount();
+    for (uint32_t colorIndex = 0; colorIndex < maxInputAttachmentCount; ++colorIndex)
     {
         descOut->addBinding(baseBinding, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1,
                             VK_SHADER_STAGE_FRAGMENT_BIT, nullptr);
@@ -1339,7 +1342,7 @@ ProgramTransformOptions ProgramExecutableVk::getTransformOptions(
         contextVk->getFeatures().emulateTransformFeedback.enabled &&
         !contextVk->getState().isTransformFeedbackActiveUnpaused();
     FramebufferVk *drawFrameBuffer = vk::GetImpl(contextVk->getState().getDrawFramebuffer());
-    const bool hasFramebufferFetch = mExecutable->usesFramebufferFetch();
+    const bool hasFramebufferFetch = mExecutable->usesColorFramebufferFetch();
     const bool isMultisampled      = drawFrameBuffer->getSamples() > 1;
     transformOptions.multiSampleFramebufferFetch = hasFramebufferFetch && isMultisampled;
     transformOptions.enableSampleShading =
@@ -1644,7 +1647,7 @@ angle::Result ProgramExecutableVk::createPipelineLayout(
     addAtomicCounterBufferDescriptorSetDesc(mExecutable->getAtomicCounterBuffers(),
                                             &mShaderResourceSetDesc);
     addImageDescriptorSetDesc(&mShaderResourceSetDesc);
-    addInputAttachmentDescriptorSetDesc(&mShaderResourceSetDesc);
+    addInputAttachmentDescriptorSetDesc(context, &mShaderResourceSetDesc);
 
     ANGLE_TRY(descriptorSetLayoutCache->getDescriptorSetLayout(
         context, mShaderResourceSetDesc,
